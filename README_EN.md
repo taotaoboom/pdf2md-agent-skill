@@ -23,6 +23,7 @@ A born-digital PDF containing ordinary text may convert without an API key. If a
 ## Features
 
 - Per-page PDF routing between PyMuPDF text extraction and visual OCR
+- Parallel OCR: all OCR pages are classified and pre-rendered in one pass on the main thread, then dispatched together to a thread pool (default concurrency 10) so a multi-page paper finishes in roughly a single page's latency instead of waiting page by page
 - LaTeX-oriented OCR prompts for equation-heavy pages
 - Paragraph reconstruction and basic multi-column ordering for text PDFs
 - DOCX, PPTX, XLSX, HTML, CSV, and other formats supported through `markitdown`
@@ -116,6 +117,7 @@ Key options:
 | `-o, --output`    | Required Markdown output path                                 |
 | `--ocr`           | Force visual OCR for every PDF page                           |
 | `-m, --model`     | Visual model ID; defaults to `doubao-seed-1-6-flash-250828` |
+| `-j, --concurrency` | OCR worker count, default 10 (env `PDF2MD_OCR_CONCURRENCY`); set 1 for sequential |
 | `--allow-partial` | Return success even when one or more OCR pages fail           |
 | `--no-llm`        | Disable LLM enhancement for non-PDF formats                   |
 | `--version`       | Print the converter version                                   |

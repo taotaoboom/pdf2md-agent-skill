@@ -21,7 +21,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 SCRIPT = os.path.join(ROOT, "scripts", "md_convert.py")
 EXAMPLES = os.path.join(ROOT, "examples")
-VERSION = "2.3.1"
+VERSION = "2.4.0"
 
 SPEC = importlib.util.spec_from_file_location("md_convert", SCRIPT)
 MD_CONVERT = importlib.util.module_from_spec(SPEC)
@@ -215,6 +215,33 @@ class OpenAI:
         assert partial.returncode == 0, partial.stderr
         assert "--allow-partial" in partial.stderr
         assert "OK:" in partial.stderr
+
+
+def test_concurrency_one_runs_sequential_path():
+    """-j 1 走顺序分支：fake openai 全失败时，与默认并行路径同样报 OCR 缺页。"""
+    src = os.path.join(EXAMPLES, "sample.pdf")
+    fake_openai = """
+class _Completions:
+    def create(self, **kwargs):
+        raise RuntimeError("simulated OCR failure")
+class _Chat:
+    completions = _Completions()
+class OpenAI:
+    def __init__(self, **kwargs):
+        self.chat = _Chat()
+"""
+    with tempfile.TemporaryDirectory() as d:
+        with open(os.path.join(d, "openai.py"), "w", encoding="utf-8") as f:
+            f.write(fake_openai)
+        out = os.path.join(d, "out.md")
+        env = dict(os.environ)
+        env["ARK_API_KEY"] = "test-key"
+        env["PYTHONPATH"] = d + os.pathsep + env.get("PYTHONPATH", "")
+
+        r = run([src, "-o", out, "-j", "1"], env=env)
+        assert r.returncode != 0
+        assert "检测到 OCR 缺页" in r.stderr
+        assert "OK:" not in r.stderr
 
 
 if __name__ == "__main__":

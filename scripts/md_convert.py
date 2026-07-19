@@ -10,19 +10,24 @@ markitdown skill - PDF/文档 转 Markdown（面向 LLM agent）
   - 混合型 PDF           -> 逐页自动分流
   - 非 PDF（Word/PPT等） -> markitdown 原生
 
+加速：先在主线程一次性完成全部分类与图片预渲染，再把所有 OCR 页一次性
+提交到线程池并行调用视觉模型（默认并发 10），把串行等待折叠成近似单页耗时。
+PyMuPDF 非线程安全，故渲染留在主线程；openai v1 SDK 客户端线程安全，全程复用一个。
+
 用法:
-    python3 md_convert.py <input> -o <output.md> [--ocr] [--allow-partial] [--no-llm] [-m MODEL] [--version]
+    python3 md_convert.py <input> -o <output.md> [--ocr] [--allow-partial] [--no-llm] [-m MODEL] [-j N] [--version]
 
 环境变量:
-    ARK_API_KEY  - Ark API Key（公式密集页、扫描页或空文本页触发视觉 OCR 时必需）
-    ARK_BASE_URL - 可选，OpenAI-compatible 端点（默认火山方舟）
+    ARK_API_KEY            - Ark API Key（公式密集页、扫描页或空文本页触发视觉 OCR 时必需）
+    ARK_BASE_URL           - 可选，OpenAI-compatible 端点（默认火山方舟）
+    PDF2MD_OCR_CONCURRENCY - 可选，OCR 并发数（等价于 -j，默认 10）
 """
 
 import os
 import sys
 import base64
 
-__version__ = "2.3.1"
+__version__ = "2.4.0"
 
 DEFAULT_MODEL = "doubao-seed-1-6-flash-250828"
 DEFAULT_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3"
@@ -30,6 +35,9 @@ DEFAULT_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3"
 SCAN_TEXT_THRESHOLD = 50
 # OCR 单页失败时的重试次数（不含首次），用于应对网络抖动/限流
 OCR_MAX_RETRIES = 1
+# OCR 并发数：默认 10，可用 -j 或 PDF2MD_OCR_CONCURRENCY 覆盖；设 1 则顺序处理
+DEFAULT_CONCURRENCY = 10
+MAX_CONCURRENCY = 16
 
 
 def get_ark_client():
@@ -128,33 +136,41 @@ def extract_text_page(page):
 # PDF 扫描页 OCR
 # ---------------------------------------------------------------------------
 
-def ocr_page(page, model, client):
-    """渲染页面为图片，调用 Ark 视觉模型 OCR。
+# 视觉 OCR 提示词：转写为 Markdown，公式转 LaTeX，保留原文语言
+OCR_PROMPT = (
+    "Transcribe this document page image to Markdown. Rules:\n"
+    "1. Output ONLY the transcribed content. Start directly with the first word on the page.\n"
+    "2. NO commentary, NO introductions, NO descriptions (e.g. no '以下是正文', '接下来', '第一段').\n"
+    "3. Preserve headings, paragraphs, lists, and tables structure.\n"
+    "4. Transcribe math formulas as LaTeX: use $...$ for inline math, $$...$$ for display math.\n"
+    "5. Keep the original language (English stays English, do not translate).\n"
+    "6. For figures, output the caption text only."
+)
 
-    client 由调用方传入并复用，避免每页重复建连。
-    失败时重试 OCR_MAX_RETRIES 次；仍失败返回 None（由调用方统计与占位）。
+
+def _render_page_to_b64(page, scale=2.0):
+    """渲染页面为 base64 PNG（2x 缩放提高 OCR 精度）。
+
+    必须在主线程调用：PyMuPDF 的 Document/Page 非线程安全，并发渲染同一文档会崩溃。
+    worker 线程只消费返回的 base64 字符串，不触碰 fitz 对象。
     """
     import fitz
 
-    # 2x 缩放提高 OCR 精度
-    pix = page.get_pixmap(matrix=fitz.Matrix(2.0, 2.0))
-    img_b64 = base64.b64encode(pix.tobytes("png")).decode("utf-8")
+    pix = page.get_pixmap(matrix=fitz.Matrix(scale, scale))
+    return base64.b64encode(pix.tobytes("png")).decode("utf-8")
 
-    prompt = (
-        "Transcribe this document page image to Markdown. Rules:\n"
-        "1. Output ONLY the transcribed content. Start directly with the first word on the page.\n"
-        "2. NO commentary, NO introductions, NO descriptions (e.g. no '以下是正文', '接下来', '第一段').\n"
-        "3. Preserve headings, paragraphs, lists, and tables structure.\n"
-        "4. Transcribe math formulas as LaTeX: use $...$ for inline math, $$...$$ for display math.\n"
-        "5. Keep the original language (English stays English, do not translate).\n"
-        "6. For figures, output the caption text only."
-    )
 
+def ocr_image(img_b64, model, client):
+    """对单张页面图片调用视觉 OCR，返回文本；失败返回 None。
+
+    client 由调用方传入并复用（openai v1 SDK 线程安全，可跨 worker 共享）。
+    失败时重试 OCR_MAX_RETRIES 次；仍失败返回 None（由调用方统计与占位）。
+    """
     messages = [
         {
             "role": "user",
             "content": [
-                {"type": "text", "text": prompt},
+                {"type": "text", "text": OCR_PROMPT},
                 {
                     "type": "image_url",
                     "image_url": {"url": f"data:image/png;base64,{img_b64}"},
@@ -179,25 +195,26 @@ def ocr_page(page, model, client):
     return None
 
 
-def _ocr_page_chunk(page, model, client_factory, page_num, total, reason):
-    """对单页执行 OCR，返回 (chunk_text, failed)。
-
-    failed=True 时 chunk_text 为占位注释。日志格式：[page/total] reason -> OCR。
-    """
-    print(f"[{page_num}/{total}] {reason} -> OCR", file=sys.stderr)
-    client = client_factory()
-    out = ocr_page(page, model, client)
-    if out is None:
-        return f"<!-- 第 {page_num} 页 OCR 失败 -->", True
-    return out, False
+def ocr_page(page, model, client):
+    """渲染单页并调用视觉 OCR（便利封装）。返回文本或 None。"""
+    img_b64 = _render_page_to_b64(page)
+    return ocr_image(img_b64, model, client)
 
 
 # ---------------------------------------------------------------------------
-# PDF 主转换（自动逐页分流）
+# PDF 主转换（自动逐页分流 + 并行 OCR）
 # ---------------------------------------------------------------------------
 
-def convert_pdf(input_path, model, force_ocr=False):
+def convert_pdf(input_path, model, force_ocr=False, concurrency=DEFAULT_CONCURRENCY):
     """自动逐页分流：文本页 PyMuPDF，公式页/扫描页 LLM OCR。
+
+    三阶段流水线（加速）：
+      1. 分类 + 预渲染（主线程，本地）：逐页判定类型，文本页直接提取，
+         OCR 页预渲染为 base64 PNG。PyMuPDF 非线程安全，全部留在主线程。
+      2. 并行 OCR（线程池）：所有 OCR 页一次性提交，共享一个 Ark client
+         （openai v1 SDK 线程安全）。concurrency=1 时退化为顺序处理，
+         行为与旧版逐页一致。
+      3. 按页序组装 + 跨页连字符断词合并。
 
     分流逻辑：
     - force_ocr：强制全篇 OCR
@@ -212,6 +229,10 @@ def convert_pdf(input_path, model, force_ocr=False):
     只有完全不触发 OCR 的文本 PDF 才无需 ARK_API_KEY。
     """
     import fitz
+    import concurrent.futures
+    import threading
+
+    concurrency = max(1, min(int(concurrency), MAX_CONCURRENCY))
 
     with fitz.open(input_path) as doc:
         if doc.is_encrypted and not doc.authenticate(""):
@@ -223,61 +244,78 @@ def convert_pdf(input_path, model, force_ocr=False):
             print("ERROR: PDF 无任何页面", file=sys.stderr)
             sys.exit(1)
 
-        # 延迟创建 OCR 客户端：首次需要 OCR 时才建，纯文本 PDF 无需 ARK_API_KEY
-        client = None
-
-        def ensure_client():
-            nonlocal client
-            if client is None:
-                client = get_ark_client()
-            return client
-
-        chunks = []
-        ocr_count = 0
-        ocr_failures = 0
+        # 阶段 1：分类 + 预渲染（主线程，保证 PyMuPDF 单线程访问）
+        text_chunks = [None] * total   # 文本页结果，按页索引
+        ocr_tasks = []                 # 待 OCR：(idx, page_num, img_b64, reason)
 
         for idx, page in enumerate(doc):
             page_num = idx + 1
 
             if force_ocr:
-                ocr_count += 1
-                chunk, failed = _ocr_page_chunk(
-                    page, model, ensure_client, page_num, total, "强制 OCR"
-                )
-                ocr_failures += failed
-                chunks.append(chunk)
-                continue
-
-            # 扫描页检测（文字稀少+有图片）
-            if _is_scanned_page(page):
-                ocr_count += 1
-                chunk, failed = _ocr_page_chunk(
-                    page, model, ensure_client, page_num, total, "扫描页"
-                )
-                ocr_failures += failed
-                chunks.append(chunk)
-                continue
-
-            # 文本页：先 PyMuPDF 提取
-            text = extract_text_page(page)
-
-            # 公式密集页：OCR 转写 LaTeX 公式（比 PyMuPDF 碎片化好很多）
-            if _is_formula_heavy(text):
-                ocr_count += 1
-                chunk, failed = _ocr_page_chunk(
-                    page, model, ensure_client, page_num, total, "公式页"
-                )
-                ocr_failures += failed
-                chunks.append(chunk)
-            elif text.strip():
-                print(f"[{page_num}/{total}] 文本页 -> PyMuPDF", file=sys.stderr)
-                chunks.append(text)
+                reason = "强制 OCR"
+            elif _is_scanned_page(page):
+                reason = "扫描页"
             else:
-                ocr_count += 1
-                chunk, failed = _ocr_page_chunk(
-                    page, model, ensure_client, page_num, total, "文本为空"
+                text = extract_text_page(page)
+                if _is_formula_heavy(text):
+                    reason = "公式页"
+                elif text.strip():
+                    print(f"[{page_num}/{total}] 文本页 -> PyMuPDF", file=sys.stderr)
+                    text_chunks[idx] = text
+                    continue
+                else:
+                    reason = "文本为空"
+
+            print(f"[{page_num}/{total}] {reason} -> OCR", file=sys.stderr)
+            img_b64 = _render_page_to_b64(page)
+            ocr_tasks.append((idx, page_num, img_b64, reason))
+
+        # 阶段 2：并行 OCR（网络 I/O 并行；client 复用，线程安全）
+        ocr_count = len(ocr_tasks)
+        ocr_failures = 0
+        ocr_results = {}  # idx -> (chunk_text, failed)
+
+        if ocr_tasks:
+            # 共享一个 client；无 ARK_API_KEY 在此 exit 2
+            client = get_ark_client()
+            log_lock = threading.Lock()
+
+            def run_ocr(task):
+                """单页 OCR 任务：返回 (idx, chunk_text, failed)，自处理占位与日志。"""
+                tidx, tpage, timg, treason = task
+                out = ocr_image(timg, model, client)
+                if out is None:
+                    with log_lock:
+                        print(f"[{tpage}/{total}] {treason} -> OCR 失败", file=sys.stderr)
+                    return tidx, f"<!-- 第 {tpage} 页 OCR 失败 -->", True
+                with log_lock:
+                    print(f"[{tpage}/{total}] {treason} -> OCR 完成", file=sys.stderr)
+                return tidx, out, False
+
+            if concurrency == 1 or len(ocr_tasks) == 1:
+                # 顺序分支：与旧版逐页行为等价
+                for task in ocr_tasks:
+                    tidx, chunk, failed = run_ocr(task)
+                    ocr_results[tidx] = (chunk, failed)
+                    ocr_failures += failed
+            else:
+                print(
+                    f"并行 OCR：{ocr_count} 页，并发 {concurrency}", file=sys.stderr
                 )
-                ocr_failures += failed
+                with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as ex:
+                    futures = [ex.submit(run_ocr, task) for task in ocr_tasks]
+                    for fut in concurrent.futures.as_completed(futures):
+                        tidx, chunk, failed = fut.result()
+                        ocr_results[tidx] = (chunk, failed)
+                        ocr_failures += failed
+
+        # 阶段 3：按页序组装（文本页 + OCR 页归位）
+        chunks = []
+        for idx in range(total):
+            if text_chunks[idx] is not None:
+                chunks.append(text_chunks[idx])
+            else:
+                chunk, _failed = ocr_results[idx]
                 chunks.append(chunk)
 
     print(f"完成：共 {total} 页，其中 {ocr_count} 页 OCR（{ocr_failures} 页失败）", file=sys.stderr)
@@ -379,6 +417,11 @@ def main():
         help="强制全篇 LLM OCR（确定是扫描件时用，省去自动检测）"
     )
     parser.add_argument(
+        "-j", "--concurrency", type=int,
+        default=int(os.environ.get("PDF2MD_OCR_CONCURRENCY", DEFAULT_CONCURRENCY)),
+        help=f"OCR 并发数（默认 {DEFAULT_CONCURRENCY}，设 1 则顺序处理）"
+    )
+    parser.add_argument(
         "--allow-partial", action="store_true",
         help="允许部分 OCR 页面失败后仍返回成功；默认任一 OCR 失败都返回非零退出码"
     )
@@ -405,7 +448,7 @@ def main():
     ocr_failures = 0
     if ext == ".pdf":
         markdown, ocr_count, ocr_failures = convert_pdf(
-            args.input, args.model, force_ocr=args.ocr
+            args.input, args.model, force_ocr=args.ocr, concurrency=args.concurrency
         )
     else:
         use_llm = not args.no_llm

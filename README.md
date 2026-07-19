@@ -13,6 +13,7 @@
 ## ✨ 核心特性
 
 - **📄 PDF 智能分流**（独家）：逐页自动判断，文本页 PyMuPDF（快+免费）、公式页视觉 OCR（转 LaTeX）、扫描页 OCR-一篇 40 页论文只 OCR 8-10 页，兼顾质量与速度
+- **⚡ 并行 OCR**：所有 OCR 页先一次性分类预渲染，再并行调用视觉模型（默认并发 10），多篇公式页近似单页耗时而非逐页串行等待
 - **🔢 公式转 LaTeX**：学术论文公式从 Unicode 碎片 → 标准 LaTeX（`\( A_i \sim P_{\pi,\mathcal{T}}(\cdot | E_{i-1}) \)`），LLM 友好
 - **📝 段落结构保留**：按 block 合并成段落，非"一行一断"；双栏论文正确排序；自动过滤页眉页脚/水印
 - **📦 全格式覆盖**：PDF + docx/pptx/xlsx/html/csv/epub 等，一条命令统一处理
@@ -212,6 +213,7 @@ python3 -m pip install -r requirements.txt
 | ---------------- | ------------------- | --------------------------------------------------------------- |
 | `ARK_API_KEY`  | 触发视觉 OCR 时必需 | 公式密集页、扫描页或空文本页需要；完全本地提取的文本 PDF 可不设 |
 | `ARK_BASE_URL` | 可选                | 默认 `https://ark.cn-beijing.volces.com/api/v3`               |
+| `PDF2MD_OCR_CONCURRENCY` | 可选        | OCR 并发数，默认 10；等价 `-j`，设 1 顺序处理                    |
 
 ### 默认视觉模型
 
@@ -263,6 +265,7 @@ python3 scripts/md_convert.py scanned.pdf -o scanned.md --ocr
 | `-o, --output`    | 输出 Markdown 路径（必需）                                         |
 | `--ocr`           | 强制全篇 LLM OCR（扫描件）                                         |
 | `-m, --model`     | 视觉模型，默认 `doubao-seed-1-6-flash-250828`                    |
+| `-j, --concurrency` | OCR 并发数，默认 10（等价环境变量 `PDF2MD_OCR_CONCURRENCY`）；设 1 顺序处理 |
 | `--allow-partial` | 允许部分 OCR 页面失败后仍返回成功；默认任一 OCR 缺页都返回非零状态 |
 | `--no-llm`        | 非 PDF 格式禁用 LLM 增强                                           |
 

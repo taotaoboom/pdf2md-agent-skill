@@ -1,0 +1,12 @@
+# markitdown skill 核心依赖
+markitdown>=0.1.6
+openai>=1.0
+pymupdf>=1.28
+
+# Office 格式支持（markitdown 可选依赖，按需安装）
+python-docx>=1.0    # .docx
+python-pptx>=1.0    # .pptx
+openpyxl>=3.1       # .xlsx
+xlrd>=2.0           # .xls（旧格式）
+beautifulsoup4>=4.12  # .html
+lxml>=5.0           # .html/.xml 解析后端

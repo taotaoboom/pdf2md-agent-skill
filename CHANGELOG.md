@@ -4,6 +4,17 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.3.1] - 2026-07-19
+
+### 修复
+
+- 拒绝输入与输出指向同一文件或符号链接别名，防止覆盖原文档
+- 统一视觉 OCR 的 API Key 契约：公式密集页、扫描页和空文本页均明确提示需要 `ARK_API_KEY`
+- 移除对整份 XLSX Markdown 的全局尾零替换，避免篡改版本号、料号等文本值
+- 任一 OCR 页面失败时默认返回非零退出码；新增 `--allow-partial` 显式接受残缺输出
+- Skill 命令不再写死 Claude Code 与 `/tmp` 路径，并增加 CLI、Claude Code、Codex 安装说明
+- 修正 Codex skill frontmatter，增加 `agents/openai.yaml` 与英文 README
+
 ## [2.3.0] - 2026-07-19
 
 首次公开发布。
@@ -20,4 +31,4 @@
 - 加密 PDF / 空 PDF 友好报错
 - 输出目录自动创建（支持 `-o /tmp/sub/out.md` 深层路径）
 - `--version`、`--ocr`、`--no-llm`、`-m` 参数
-- `ARK_BASE_URL` 支持切换 OpenAI-compatible 端点（OpenAI / Azure / 本地 vLLM 等）
+- `ARK_BASE_URL` 支持切换兼容 Chat Completions、视觉输入和 data URL 的端点；Ark 已验证

@@ -11,10 +11,10 @@ markitdown skill - PDF/文档 转 Markdown（面向 LLM agent）
   - 非 PDF（Word/PPT等） -> markitdown 原生
 
 用法:
-    python3 md_convert.py <input> -o <output.md> [--ocr] [--no-llm] [-m MODEL] [--version]
+    python3 md_convert.py <input> -o <output.md> [--ocr] [--allow-partial] [--no-llm] [-m MODEL] [--version]
 
 环境变量:
-    ARK_API_KEY  - Ark API Key（扫描页 OCR 必需；未设置时扫描页会报错）
+    ARK_API_KEY  - Ark API Key（公式密集页、扫描页或空文本页触发视觉 OCR 时必需）
     ARK_BASE_URL - 可选，OpenAI-compatible 端点（默认火山方舟）
 """
 
@@ -22,7 +22,7 @@ import os
 import sys
 import base64
 
-__version__ = "2.3.0"
+__version__ = "2.3.1"
 
 DEFAULT_MODEL = "doubao-seed-1-6-flash-250828"
 DEFAULT_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3"
@@ -42,7 +42,10 @@ def get_ark_client():
 
     api_key = os.environ.get("ARK_API_KEY")
     if not api_key:
-        print("ERROR: ARK_API_KEY 未设置（扫描页 OCR 必需）", file=sys.stderr)
+        print(
+            "ERROR: ARK_API_KEY 未设置（公式密集页、扫描页或空文本页触发视觉 OCR 时必需）",
+            file=sys.stderr,
+        )
         sys.exit(2)
 
     base_url = os.environ.get("ARK_BASE_URL", DEFAULT_BASE_URL)
@@ -176,12 +179,13 @@ def ocr_page(page, model, client):
     return None
 
 
-def _ocr_page_chunk(page, model, client, page_num, total, reason):
+def _ocr_page_chunk(page, model, client_factory, page_num, total, reason):
     """对单页执行 OCR，返回 (chunk_text, failed)。
 
     failed=True 时 chunk_text 为占位注释。日志格式：[page/total] reason -> OCR。
     """
     print(f"[{page_num}/{total}] {reason} -> OCR", file=sys.stderr)
+    client = client_factory()
     out = ocr_page(page, model, client)
     if out is None:
         return f"<!-- 第 {page_num} 页 OCR 失败 -->", True
@@ -205,7 +209,7 @@ def convert_pdf(input_path, model, force_ocr=False):
     - ocr_count：尝试 OCR 的页数
     - ocr_failures：OCR 失败的页数
 
-    纯文本 PDF 不会触发 OCR，因此无需 ARK_API_KEY。
+    只有完全不触发 OCR 的文本 PDF 才无需 ARK_API_KEY。
     """
     import fitz
 
@@ -238,7 +242,7 @@ def convert_pdf(input_path, model, force_ocr=False):
             if force_ocr:
                 ocr_count += 1
                 chunk, failed = _ocr_page_chunk(
-                    page, model, ensure_client(), page_num, total, "强制 OCR"
+                    page, model, ensure_client, page_num, total, "强制 OCR"
                 )
                 ocr_failures += failed
                 chunks.append(chunk)
@@ -248,7 +252,7 @@ def convert_pdf(input_path, model, force_ocr=False):
             if _is_scanned_page(page):
                 ocr_count += 1
                 chunk, failed = _ocr_page_chunk(
-                    page, model, ensure_client(), page_num, total, "扫描页"
+                    page, model, ensure_client, page_num, total, "扫描页"
                 )
                 ocr_failures += failed
                 chunks.append(chunk)
@@ -261,7 +265,7 @@ def convert_pdf(input_path, model, force_ocr=False):
             if _is_formula_heavy(text):
                 ocr_count += 1
                 chunk, failed = _ocr_page_chunk(
-                    page, model, ensure_client(), page_num, total, "公式页"
+                    page, model, ensure_client, page_num, total, "公式页"
                 )
                 ocr_failures += failed
                 chunks.append(chunk)
@@ -271,7 +275,7 @@ def convert_pdf(input_path, model, force_ocr=False):
             else:
                 ocr_count += 1
                 chunk, failed = _ocr_page_chunk(
-                    page, model, ensure_client(), page_num, total, "文本为空"
+                    page, model, ensure_client, page_num, total, "文本为空"
                 )
                 ocr_failures += failed
                 chunks.append(chunk)
@@ -333,17 +337,25 @@ def convert_other(input_path, use_llm, model):
     else:
         md = MarkItDown()
 
-    result = md.convert(input_path).text_content
+    return md.convert(input_path).text_content
 
-    # xlsx 后处理：openpyxl 把整数读成浮点（32 -> 32.000），去掉无意义的 .0+ 尾零
-    # 仅匹配小数点后全为 0 且后跟非数字/非科学计数法（如 32.000| -> 32|），
-    # 保留 0.001 / 0.852 等，也保留 1.0E+10 这类科学计数法
-    ext = os.path.splitext(input_path)[1].lower()
-    if ext in (".xlsx", ".xls") and result:
-        import re
-        result = re.sub(r"(\d+)\.0+(?![0-9eE])", r"\1", result)
 
-    return result
+def _paths_refer_to_same_file(input_path, output_path):
+    """Return True when output would overwrite input, including symlink aliases."""
+    input_real = os.path.realpath(os.path.abspath(input_path))
+    output_real = os.path.realpath(os.path.abspath(output_path))
+    if input_real == output_real:
+        return True
+    if os.path.exists(output_path):
+        try:
+            return os.path.samefile(input_path, output_path)
+        except OSError:
+            return False
+    return False
+
+
+def _partial_ocr_is_error(ocr_failures, allow_partial):
+    return ocr_failures > 0 and not allow_partial
 
 
 # ---------------------------------------------------------------------------
@@ -367,6 +379,10 @@ def main():
         help="强制全篇 LLM OCR（确定是扫描件时用，省去自动检测）"
     )
     parser.add_argument(
+        "--allow-partial", action="store_true",
+        help="允许部分 OCR 页面失败后仍返回成功；默认任一 OCR 失败都返回非零退出码"
+    )
+    parser.add_argument(
         "--no-llm", action="store_true",
         help="非 PDF 格式禁用 LLM 增强（对 PDF 无效）"
     )
@@ -377,6 +393,10 @@ def main():
 
     if not os.path.exists(args.input):
         print(f"ERROR: 文件不存在: {args.input}", file=sys.stderr)
+        sys.exit(1)
+
+    if _paths_refer_to_same_file(args.input, args.output):
+        print("ERROR: 输出路径不能与输入文件相同，以免覆盖原文件", file=sys.stderr)
         sys.exit(1)
 
     ext = os.path.splitext(args.input)[1].lower()
@@ -401,15 +421,16 @@ def main():
     with open(args.output, "w", encoding="utf-8") as f:
         f.write(markdown)
 
-    size_kb = os.path.getsize(args.output) / 1024
-    print(f"OK: {args.input} -> {args.output} ({size_kb:.1f} KB)", file=sys.stderr)
-
-    # OCR 失败告警：失败率高时返回非零退出码，提示 agent 不要把残缺输出当完整结果
+    # 默认拒绝把残缺 OCR 当作成功；显式 --allow-partial 才允许成功退出
     if ocr_failures > 0:
         print(f"警告：{ocr_failures}/{ocr_count} 页 OCR 失败，输出可能不完整", file=sys.stderr)
-        if ocr_count > 0 and ocr_failures >= ocr_count * 0.5:
-            print("错误：OCR 失败率过高，请检查 ARK_API_KEY / 网络 / 模型名", file=sys.stderr)
+        if _partial_ocr_is_error(ocr_failures, args.allow_partial):
+            print("错误：检测到 OCR 缺页；检查 Key、网络或模型，或用 --allow-partial 接受残缺输出", file=sys.stderr)
             sys.exit(1)
+        print("提示：已通过 --allow-partial 接受残缺输出", file=sys.stderr)
+
+    size_kb = os.path.getsize(args.output) / 1024
+    print(f"OK: {args.input} -> {args.output} ({size_kb:.1f} KB)", file=sys.stderr)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,4 @@
+interface:
+  display_name: "PDF to Markdown for Agents"
+  short_description: "Convert PDFs and Office files into agent-ready Markdown"
+  default_prompt: "Use $pdf2md-agent-skill to convert this document into Markdown, then analyze the converted content."

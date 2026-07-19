@@ -1,5 +1,7 @@
 # pdf2md-agent-skill
 
+[English](README_EN.md) | 简体中文
+
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10+-3776AB?logo=python\&logoColor=white)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Claude Code Skill](https://img.shields.io/badge/Claude%20Code-Skill-D97757?logo=anthropic\&logoColor=white)](https://claude.com/claude-code)
@@ -20,12 +22,12 @@
 
 **学术论文 PDF 提取**
 
-| 场景 | 通用工具（markitdown 默认 pdfminer 后端）             | 本 skill                                                                  |
-| -- | ------------------------------------------- | ------------------------------------------------------------------------ |
-| 空格 | `UncertaintyQuantificationinLLMAgents` 单词粘连 | `Uncertainty Quantification in LLM Agents` 词间空格正常                        |
-| 公式 | `𝐴 𝑖 ∼ 𝑃 𝜋,𝒯 (·\|𝐸 𝑖−1 …)` 被拆成表格碎片   | `\[ A_i \sim P_{\pi,\mathcal{T}}(\cdot \| E_{i-1}, O_{i-1}) \]` 标准 LaTeX |
-| 排版 | 每物理行单独成行、单词粘连                               | 按 block 合并段落，结构清晰                                                        |
-| 双栏 | 左右栏交错，阅读顺序错乱                                | 先左后右，阅读顺序正确                                                              |
+| 场景 | 通用工具（markitdown 默认 pdfminer 后端）             | 本 skill                                                                    |
+| ---- | ----------------------------------------------------- | --------------------------------------------------------------------------- |
+| 空格 | `UncertaintyQuantificationinLLMAgents` 单词粘连     | `Uncertainty Quantification in LLM Agents` 词间空格正常                   |
+| 公式 | `𝐴 𝑖 ∼ 𝑃 𝜋,𝒯 (·\|𝐸 𝑖−1 …)` 被拆成表格碎片 | `\[ A_i \sim P_{\pi,\mathcal{T}}(\cdot \| E_{i-1}, O_{i-1}) \]` 标准 LaTeX |
+| 排版 | 每物理行单独成行、单词粘连                            | 按 block 合并段落，结构清晰                                                 |
+| 双栏 | 左右栏交错，阅读顺序错乱                              | 先左后右，阅读顺序正确                                                      |
 
 ## 📸 实际效果
 
@@ -83,9 +85,9 @@ is the humidity level in Miami,Florida in the upcoming 7 days?". The expected re
 
 → 完整输出 [`examples/sample_docx.md`](examples/sample_docx.md)（含表格转换）
 
-### Excel · 多 sheet + 数字后处理
+### Excel · 多 sheet + 原值保留
 
-每 sheet 独立成章节；openpyxl 把整数读成浮点的尾零自动去除（`32.000` → `32`，`0.852` 保留）：
+每个 sheet 独立成章节。转换器不对生成后的 Markdown 做全局数字替换，避免误改文本中的版本号、料号或固定精度标识：
 
 ```markdown
 ## 实验结果
@@ -99,63 +101,103 @@ is the humidity level in Miami,Florida in the upcoming 7 days?". The expected re
 | 参数 | 值 | 说明 |
 | --- | --- | --- |
 | learning\_rate | 0.001 | 学习率 |
-| batch\_size | 32 | 批大小 |
-| epochs | 100 | 训练轮数 |
+| batch\_size | 32.000 | 批大小 |
+| epochs | 100.000 | 训练轮数 |
 ```
 
 → 完整输出 [`examples/sample_xlsx.md`](examples/sample_xlsx.md)
 
 ## 🚀 快速开始
 
-```bash
-# 1. 安装
-git clone https://github.com/taotaoboom/pdf2md-agent-skill ~/.claude/skills/pdf2md-agent-skill
-pip install -r ~/.claude/skills/pdf2md-agent-skill/requirements.txt
+### 方式一：独立 CLI
 
-# 2. 配置 OCR API Key（公式页/扫描页 OCR 必需；纯文本 PDF 可跳过）
+```bash
+# 1. 克隆并创建隔离环境
+git clone https://github.com/taotaoboom/pdf2md-agent-skill.git
+cd pdf2md-agent-skill
+python3 -m venv .venv
+source .venv/bin/activate
+python3 -m pip install -r requirements.txt
+
+# 2. 无 Key 快速体验：该双栏文本 PDF 全程本地转换
+python3 scripts/md_convert.py examples/sample_twocol.pdf -o sample_twocol.md
+```
+
+Windows PowerShell 使用 `.venv\Scripts\Activate.ps1` 激活环境，并可将 `python3` 替换为 `py`。
+
+### 方式二：Claude Code skill
+
+```bash
+mkdir -p ~/.claude/skills
+git clone https://github.com/taotaoboom/pdf2md-agent-skill.git \
+  ~/.claude/skills/pdf2md-agent-skill
+python3 -m pip install -r \
+  ~/.claude/skills/pdf2md-agent-skill/requirements.txt
+```
+
+重启 Claude Code 后，可直接要求它阅读、总结或转换 PDF。
+
+### 方式三：Codex skill
+
+```bash
+CODEX_SKILLS_DIR="${CODEX_HOME:-$HOME/.codex}/skills"
+mkdir -p "$CODEX_SKILLS_DIR"
+git clone https://github.com/taotaoboom/pdf2md-agent-skill.git \
+  "$CODEX_SKILLS_DIR/pdf2md-agent-skill"
+python3 -m pip install -r \
+  "$CODEX_SKILLS_DIR/pdf2md-agent-skill/requirements.txt"
+```
+
+重启 Codex 后，可通过 `$pdf2md-agent-skill` 显式调用，也可在文档转换任务中自动触发。
+
+### 可选：配置视觉 OCR
+
+只有公式密集页、扫描页或文本提取为空的页面会调用视觉 OCR：
+
+```bash
 export ARK_API_KEY="your-ark-api-key"
 
-# 3. 转换
-python3 ~/.claude/skills/pdf2md-agent-skill/scripts/md_convert.py paper.pdf -o paper.md
+# 转换
+python3 scripts/md_convert.py paper.pdf -o paper.md
 ```
 
 ## 📋 支持格式
 
-| 格式                      | 后端                         | 质量    | 说明                |
-| ----------------------- | -------------------------- | ----- | ----------------- |
-| `.pdf`                  | PyMuPDF + 视觉 OCR           | ⭐⭐⭐⭐⭐ | 智能分流，公式转 LaTeX    |
-| `.docx`                 | markitdown (mammoth)       | ⭐⭐⭐⭐  | 标题/列表/表格保留        |
-| `.pptx`                 | markitdown                 | ⭐⭐⭐⭐  | 幻灯片分隔 + 图片描述      |
-| `.xlsx`                 | markitdown (openpyxl)      | ⭐⭐⭐⭐⭐ | 多 sheet + 数字后处理   |
-| `.html`                 | markitdown (beautifulsoup) | ⭐⭐⭐⭐  | 自动清理 script/style |
-| `.csv`                  | markitdown                 | ⭐⭐⭐⭐⭐ | 转 Markdown 表格     |
-| `.epub` / `.ipynb` / 图片 | markitdown                 | ⭐⭐⭐⭐  | 多格式支持             |
+| 格式                          | 后端                       | 质量       | 说明                    |
+| ----------------------------- | -------------------------- | ---------- | ----------------------- |
+| `.pdf`                      | PyMuPDF + 视觉 OCR         | ⭐⭐⭐⭐⭐ | 智能分流，公式转 LaTeX  |
+| `.docx`                     | markitdown (mammoth)       | ⭐⭐⭐⭐   | 标题/列表/表格保留      |
+| `.pptx`                     | markitdown                 | ⭐⭐⭐⭐   | 幻灯片分隔 + 图片描述   |
+| `.xlsx`                     | markitdown (openpyxl)      | ⭐⭐⭐⭐⭐ | 多 sheet + 文本原值保留 |
+| `.html`                     | markitdown (beautifulsoup) | ⭐⭐⭐⭐   | 自动清理 script/style   |
+| `.csv`                      | markitdown                 | ⭐⭐⭐⭐⭐ | 转 Markdown 表格        |
+| `.epub` / `.ipynb` / 图片 | markitdown                 | ⭐⭐⭐⭐   | 多格式支持              |
 
 ## 🔧 依赖说明
 
 ### 必需依赖
 
-| 依赖           | 作用                            | 必需场景     |
-| ------------ | ----------------------------- | -------- |
-| `pymupdf`    | PDF 文本提取 + 页面渲染               | 所有 PDF   |
-| `markitdown` | Office/HTML/CSV 等格式后端         | 非 PDF 格式 |
-| `openai`     | 调用视觉模型 API（OpenAI-compatible） | OCR 功能   |
+| 依赖           | 作用                                  | 必需场景    |
+| -------------- | ------------------------------------- | ----------- |
+| `pymupdf`    | PDF 文本提取 + 页面渲染               | 所有 PDF    |
+| `markitdown` | Office/HTML/CSV 等格式后端            | 非 PDF 格式 |
+| `openai`     | 调用视觉模型 API（OpenAI-compatible） | OCR 功能    |
 
 ### 按格式可选（markitdown 后端）
 
-| 依赖                            | 格式                                       |
-| ----------------------------- | ---------------------------------------- |
-| `python-docx`                 | .docx                                    |
-| `python-pptx`                 | .pptx                                    |
-| `openpyxl`                    | .xlsx                                    |
-| `xlrd`                        | .xls（旧格式）                                |
-| `beautifulsoup4` + `lxml`     | .html                                    |
+| 依赖                              | 格式                                              |
+| --------------------------------- | ------------------------------------------------- |
+| `python-docx`                   | .docx                                             |
+| `python-pptx`                   | .pptx                                             |
+| `openpyxl`                      | .xlsx                                             |
+| `xlrd`                          | .xls（旧格式）                                    |
+| `beautifulsoup4` + `lxml`     | .html                                             |
 | `pdfminer.six` / `pdfplumber` | markitdown 内部 PDF（本 skill 已用 PyMuPDF 替代） |
 
 一键安装全部：
 
 ```bash
-pip install -r requirements.txt
+python3 -m pip install -r requirements.txt
 ```
 
 ### Python 版本
@@ -166,10 +208,23 @@ pip install -r requirements.txt
 
 ### 环境变量
 
-| 变量             | 必需       | 说明                                            |
-| -------------- | -------- | --------------------------------------------- |
-| `ARK_API_KEY`  | OCR 功能必需 | 火山方舟 API Key（纯文本 PDF 可不设）                     |
-| `ARK_BASE_URL` | 可选       | 默认 `https://ark.cn-beijing.volces.com/api/v3` |
+| 变量             | 必需                | 说明                                                            |
+| ---------------- | ------------------- | --------------------------------------------------------------- |
+| `ARK_API_KEY`  | 触发视觉 OCR 时必需 | 公式密集页、扫描页或空文本页需要；完全本地提取的文本 PDF 可不设 |
+| `ARK_BASE_URL` | 可选                | 默认 `https://ark.cn-beijing.volces.com/api/v3`               |
+
+### 默认视觉模型
+
+当前默认使用火山方舟视觉模型 **`doubao-seed-1-6-flash-250828`**。它只在公式密集页、扫描页或空文本页触发视觉 OCR 时调用；普通文本页仍由 PyMuPDF 在本地处理。
+
+可通过 `-m/--model` 覆盖默认模型：
+
+```bash
+python3 scripts/md_convert.py paper.pdf -o paper.md \
+  --model YOUR_ARK_VISION_MODEL_ID
+```
+
+模型 ID 可能随平台更新而下线或更名。若 OCR 报模型不存在，请在[火山方舟控制台](https://www.volcengine.com/product/ark)选择当前可用的视觉模型。
 
 ### 获取 Ark API Key
 
@@ -181,9 +236,7 @@ pip install -r requirements.txt
    source ~/.zshrc
    ```
 
-> **换用其他视觉模型**：本 skill 通过 OpenAI-compatible API 调用视觉模型。设置 `ARK_BASE_URL` 指向其他兼容端点（如 OpenAI、Azure、本地 vLLM），并用 `-m` 指定模型名即可。
-
-> **默认模型可能更新**：默认模型 `doubao-seed-1-6-flash-250828` 是火山方舟的视觉模型 ID，可能随平台更新而下线或更名。若 OCR 报模型不存在，请在[火山方舟控制台](https://www.volcengine.com/product/ark)查看当前可用的视觉模型，用 `-m` 指定。
+> **换用其他视觉模型**：Ark 已验证。其他端点必须兼容 OpenAI Chat Completions、视觉输入和 data URL；可通过 `ARK_BASE_URL` 与 `-m` 尝试配置，但目前不声明 Azure 或本地 vLLM 已验证兼容。
 
 ## 📖 使用方法
 
@@ -204,17 +257,18 @@ python3 scripts/md_convert.py scanned.pdf -o scanned.md --ocr
 
 ### 参数
 
-| 参数             | 说明                                     |
-| -------------- | -------------------------------------- |
-| `input`        | 输入文件路径（必需）                             |
-| `-o, --output` | 输出 Markdown 路径（必需）                     |
-| `--ocr`        | 强制全篇 LLM OCR（扫描件）                      |
-| `-m, --model`  | 视觉模型，默认 `doubao-seed-1-6-flash-250828` |
-| `--no-llm`     | 非 PDF 格式禁用 LLM 增强                      |
+| 参数                | 说明                                                               |
+| ------------------- | ------------------------------------------------------------------ |
+| `input`           | 输入文件路径（必需）                                               |
+| `-o, --output`    | 输出 Markdown 路径（必需）                                         |
+| `--ocr`           | 强制全篇 LLM OCR（扫描件）                                         |
+| `-m, --model`     | 视觉模型，默认 `doubao-seed-1-6-flash-250828`                    |
+| `--allow-partial` | 允许部分 OCR 页面失败后仍返回成功；默认任一 OCR 缺页都返回非零状态 |
+| `--no-llm`        | 非 PDF 格式禁用 LLM 增强                                           |
 
-### 作为 Claude Code skill
+### 作为 Agent skill
 
-安装到 `~/.claude/skills/` 后，agent 遇到 PDF 会**自动触发**本 skill，无需手动调用。
+安装到 Claude Code 或 Codex 对应的 skills 目录并重启后，agent 可在 PDF/文档转换任务中调用本 skill。Codex 也可以使用 `$pdf2md-agent-skill` 显式调用。
 
 **核心规则（写给 agent）**：禁止用 Read 直接读 PDF，必须先转 Markdown 再读。
 
@@ -233,21 +287,16 @@ python3 scripts/md_convert.py scanned.pdf -o scanned.md --ocr
 
 ### Office 格式
 
-走 markitdown 原生路径，xlsx 额外做数字后处理（`32.000` → `32`），pptx 图片可选 LLM 描述。
-
-## ⚠️ 已知限制
-
-- **公式 OCR 偶有小误差**：如 `P_{\pi,\mathcal{T}}` 偶识别为 `P_{\pi,T}`，整体结构正确
-- **pptx 项目符号**：markitdown 不保留 `-` 前缀，内容完整但格式简化
-- **混合布局首页**：论文首页（标题跨栏+双栏正文）章节标题位置可能不完美
-- **SPA 网页**：纯 JS 渲染的 SPA（`<div id="root">`）无文本，转换结果为空（正常行为）
+走 markitdown 原生路径；本 skill 不对 xlsx 生成的 Markdown 做全局数字替换，以免篡改文本值。pptx 图片可选 LLM 描述。
 
 ## 📂 文件结构
 
 ```
 pdf2md-agent-skill/
-├── SKILL.md            # Claude Code skill 定义（面向 agent）
+├── SKILL.md            # Agent skill 定义
+├── agents/openai.yaml  # Codex UI 元数据
 ├── README.md           # 本文件
+├── README_EN.md        # English documentation
 ├── CHANGELOG.md        # 版本变更记录
 ├── LICENSE             # MIT
 ├── requirements.txt    # 依赖清单

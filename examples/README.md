@@ -7,7 +7,7 @@
 | 示例 | 输入 | 输出 | 展示特性 |
 |------|------|------|----------|
 | docx | `sample.docx` | `sample_docx.md` | 标题层级、有序/无序列表、表格 |
-| xlsx | `sample.xlsx` | `sample_xlsx.md` | 多 sheet、Markdown 表格、数字后处理 |
+| xlsx | `sample.xlsx` | `sample_xlsx.md` | 多 sheet、Markdown 表格、文本原值保留 |
 | pdf | `sample.pdf` | `sample_pdf.md` | PDF 智能分流、公式转 LaTeX |
 | pdf（双栏） | `sample_twocol.pdf` | `sample_twocol.md` | 双栏排序、段落合并 |
 
@@ -15,20 +15,20 @@
 
 ```bash
 # 复现示例（需先安装依赖并配置 ARK_API_KEY）
-cd ~/.claude/skills/pdf2md-agent-skill
+cd /path/to/pdf2md-agent-skill
 
 # docx 示例（无需 API Key）
-python3 scripts/md_convert.py examples/sample.docx -o /tmp/out_docx.md --no-llm
+python3 scripts/md_convert.py examples/sample.docx -o ./out_docx.md --no-llm
 
 # xlsx 示例（无需 API Key）
-python3 scripts/md_convert.py examples/sample.xlsx -o /tmp/out_xlsx.md --no-llm
+python3 scripts/md_convert.py examples/sample.xlsx -o ./out_xlsx.md --no-llm
 
 # pdf 示例（需 ARK_API_KEY，公式页 OCR）
 export ARK_API_KEY="your-key"
-python3 scripts/md_convert.py examples/sample.pdf -o /tmp/out_pdf.md
+python3 scripts/md_convert.py examples/sample.pdf -o ./out_pdf.md
 
 # pdf 双栏示例（纯文本页，无需 API Key）
-python3 scripts/md_convert.py examples/sample_twocol.pdf -o /tmp/out_twocol.md
+python3 scripts/md_convert.py examples/sample_twocol.pdf -o ./out_twocol.md
 ```
 
 ## 示例 1：docx
@@ -45,7 +45,7 @@ python3 scripts/md_convert.py examples/sample_twocol.pdf -o /tmp/out_twocol.md
 `sample.xlsx` 含 2 个 sheet（"实验结果"、"超参数"）。转换后：
 - 每个 sheet 用 `## Sheet名` 标注
 - 数据转为 Markdown 表格
-- 数字后处理：`32.000` -> `32`，`0.852` 保留
+- 不对生成后的 Markdown 做全局数字替换，文本中的版本号和料号保持原值
 
 查看 [`sample_xlsx.md`](sample_xlsx.md)。
 
